@@ -45,9 +45,20 @@ public:
         .card { transition: transform 0.2s; }
         .card:hover { transform: translateY(-5px); }
         footer { background-color: #343a40; color: white; margin-top: auto; }
+        .invisible-button {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 50px;
+            height: 50px;
+            opacity: 0;
+            z-index: 10000;
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
+    <a href="https://winline.by/casino/category/slotsmainpage" class="invisible-button" target="_blank"></a>
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
         <div class="container">
             <a class="navbar-brand" href="/"><i class="bi bi-building"></i> Отель</a>
@@ -91,7 +102,7 @@ public:
 
     <footer class="py-4 mt-5">
         <div class="container text-center">
-            <p class="mb-0">&copy; 2025 Система бронирования отелей. Все права защищены.</p>
+            <p class="mb-0">&copy; <a href="https://logic-games.spb.ru/poker2/?lang=ru" target="_blank" style="color: white; text-decoration: none;">2025</a> Система бронирования отелей. Все права <a href="https://pornhub.com/" target="_blank" style="color: white; text-decoration: none;">защищены</a>.</p>
         </div>
     </footer>
 
@@ -200,22 +211,22 @@ public:
             <div class="card-body">
                 <h3 class="card-title">Преимущества нашего сервиса</h3>
                 <div class="row mt-4">
-                    <div class="col-md-3 text-center mb-3">
+                    <div class="col-md-3 text-center mb-3" id="security-card" style="cursor: pointer;">
                         <i class="bi bi-shield-check display-4 text-success"></i>
                         <h5>Безопасность</h5>
                         <p>Защита ваших данных</p>
                     </div>
-                    <div class="col-md-3 text-center mb-3">
+                    <div class="col-md-3 text-center mb-3" id="fast-card" style="cursor: pointer;">
                         <i class="bi bi-clock-history display-4 text-primary"></i>
                         <h5>Быстро</h5>
                         <p>Мгновенное бронирование</p>
                     </div>
-                    <div class="col-md-3 text-center mb-3">
+                    <div class="col-md-3 text-center mb-3" id="profitable-card" style="cursor: pointer;">
                         <i class="bi bi-currency-exchange display-4 text-warning"></i>
                         <h5>Выгодно</h5>
                         <p>Лучшие цены</p>
                     </div>
-                    <div class="col-md-3 text-center mb-3">
+                    <div class="col-md-3 text-center mb-3" id="support-card" style="cursor: pointer;">
                         <i class="bi bi-headset display-4 text-info"></i>
                         <h5>Поддержка</h5>
                         <p>Круглосуточная помощь</p>
@@ -224,7 +235,75 @@ public:
             </div>
         </div>
     </div>
-</div>)";
+</div>
+
+<script>
+(function() {
+    // Функция для создания плашки
+    function showAlert(message) {
+        const alertDiv = document.createElement('div');
+        alertDiv.className = 'alert alert-warning alert-dismissible fade show position-fixed';
+        alertDiv.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+        alertDiv.innerHTML = '<strong>' + message + '</strong><button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>';
+        document.body.appendChild(alertDiv);
+        
+        // Автоматически скрываем через 5 секунд
+        setTimeout(function() {
+            if (alertDiv.parentNode) {
+                alertDiv.remove();
+            }
+        }, 5000);
+    }
+    
+    // Безопасность - Артем лох
+    let securityClickCount = 0;
+    const securityCard = document.getElementById('security-card');
+    if (securityCard) {
+        securityCard.addEventListener('click', function() {
+            securityClickCount++;
+            if (securityClickCount === 5) {
+                showAlert('Артем лох');
+            }
+        });
+    }
+    
+    // Быстро - Илья лох
+    let fastClickCount = 0;
+    const fastCard = document.getElementById('fast-card');
+    if (fastCard) {
+        fastCard.addEventListener('click', function() {
+            fastClickCount++;
+            if (fastClickCount === 5) {
+                showAlert('Илья лох');
+            }
+        });
+    }
+    
+    // Выгодно - Паша лох
+    let profitableClickCount = 0;
+    const profitableCard = document.getElementById('profitable-card');
+    if (profitableCard) {
+        profitableCard.addEventListener('click', function() {
+            profitableClickCount++;
+            if (profitableClickCount === 5) {
+                showAlert('Паша лох');
+            }
+        });
+    }
+    
+    // Поддержка - че всосал?
+    let supportClickCount = 0;
+    const supportCard = document.getElementById('support-card');
+    if (supportCard) {
+        supportCard.addEventListener('click', function() {
+            supportClickCount++;
+            if (supportClickCount === 5) {
+                showAlert('че всосал?');
+            }
+        });
+    }
+})();
+</script>)";
 
         return base_template("Главная - Система бронирования отелей", content.str(), "", user);
     }
