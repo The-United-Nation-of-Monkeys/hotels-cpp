@@ -39,16 +39,132 @@ public:
     void initialize() {
         // Создание таблиц
         execute(R"(
-            CREATE TABLE IF NOT EXISTS rooms (
-                room_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                number TEXT UNIQUE NOT NULL,
-                name TEXT NOT NULL,
-                description TEXT,
-                type_name TEXT NOT NULL,
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                full_name TEXT NOT NULL,
+                phone TEXT NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                user_type TEXT NOT NULL,
+                organization_name TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
         )");
+
+        execute(R"(
+            CREATE TABLE IF NOT EXISTS hotels (
+                hotel_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                organization_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                address TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (organization_id) REFERENCES users(user_id)
+            )
+        )");
+
+        // Проверяем, существует ли таблица rooms и какие колонки в ней есть
+        bool table_exists = false;
+        bool has_hotel_id = false;
+        bool has_price_per_day = false;
+        sqlite3_stmt* stmt;
+        std::string check_table_sql = "SELECT name FROM sqlite_master WHERE type='table' AND name='rooms'";
+        if (sqlite3_prepare_v2(db, check_table_sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                table_exists = true;
+            }
+        }
+        sqlite3_finalize(stmt);
+
+        if (table_exists) {
+            // Проверяем, какие колонки есть
+            std::string check_sql = "PRAGMA table_info(rooms)";
+            if (sqlite3_prepare_v2(db, check_sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+                while (sqlite3_step(stmt) == SQLITE_ROW) {
+                    std::string col_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                    if (col_name == "hotel_id") {
+                        has_hotel_id = true;
+                    }
+                    if (col_name == "price_per_day") {
+                        has_price_per_day = true;
+                    }
+                }
+            }
+            sqlite3_finalize(stmt);
+        }
+
+        // Если таблицы нет или нужных колонок нет, создаем/обновляем таблицу
+        if (!table_exists || !has_hotel_id || !has_price_per_day) {
+            if (table_exists && (!has_hotel_id || !has_price_per_day)) {
+                // Миграция: создаем новую таблицу и копируем данные
+                execute(R"(
+                    CREATE TABLE IF NOT EXISTS rooms_new (
+                        room_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        hotel_id INTEGER,
+                        number TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        description TEXT,
+                        type_name TEXT NOT NULL,
+                        price_per_day REAL NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        FOREIGN KEY (hotel_id) REFERENCES hotels(hotel_id)
+                    )
+                )");
+                
+                // Копируем данные из старой таблицы
+                if (has_hotel_id) {
+                    execute(R"(
+                        INSERT INTO rooms_new (room_id, hotel_id, number, name, description, type_name, price_per_day, created_at, updated_at)
+                        SELECT room_id, hotel_id, number, name, description, type_name, 0, created_at, updated_at
+                        FROM rooms
+                    )");
+                } else {
+                    execute(R"(
+                        INSERT INTO rooms_new (room_id, hotel_id, number, name, description, type_name, price_per_day, created_at, updated_at)
+                        SELECT room_id, NULL, number, name, description, type_name, 0, created_at, updated_at
+                        FROM rooms
+                    )");
+                }
+                
+                execute("DROP TABLE rooms");
+                execute("ALTER TABLE rooms_new RENAME TO rooms");
+            } else {
+                // Создаем таблицу с нуля
+                execute(R"(
+                    CREATE TABLE IF NOT EXISTS rooms (
+                        room_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        hotel_id INTEGER,
+                        number TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        description TEXT,
+                        type_name TEXT NOT NULL,
+                        price_per_day REAL NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        FOREIGN KEY (hotel_id) REFERENCES hotels(hotel_id)
+                    )
+                )");
+            }
+        } else {
+            // Если таблица и все колонки уже есть, просто убеждаемся что таблица существует
+            execute(R"(
+                CREATE TABLE IF NOT EXISTS rooms (
+                    room_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    hotel_id INTEGER,
+                    number TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    type_name TEXT NOT NULL,
+                    price_per_day REAL NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (hotel_id) REFERENCES hotels(hotel_id)
+                )
+            )");
+        }
 
         execute(R"(
             CREATE TABLE IF NOT EXISTS guests (
@@ -86,7 +202,7 @@ public:
     // Room operations
     std::vector<Room> get_all_rooms(const std::string& type_filter = "") {
         std::vector<Room> rooms;
-        std::string sql = "SELECT room_id, number, name, description, type_name, created_at, updated_at FROM rooms";
+        std::string sql = "SELECT room_id, hotel_id, number, name, description, type_name, price_per_day, created_at, updated_at FROM rooms";
         if (!type_filter.empty()) {
             sql += " WHERE type_name LIKE '%" + type_filter + "%'";
         }
@@ -97,12 +213,14 @@ public:
             while (sqlite3_step(stmt) == SQLITE_ROW) {
                 Room room;
                 room.room_id = sqlite3_column_int64(stmt, 0);
-                room.number = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-                room.name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
-                room.description = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
-                room.type_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
-                room.created_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
-                room.updated_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+                room.hotel_id = sqlite3_column_int64(stmt, 1);
+                room.number = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+                room.name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+                room.description = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+                room.type_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
+                room.price_per_day = sqlite3_column_double(stmt, 6);
+                room.created_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 7));
+                room.updated_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 8));
                 rooms.push_back(room);
             }
         }
@@ -111,7 +229,7 @@ public:
     }
 
     Room get_room(int64_t id) {
-        std::string sql = "SELECT room_id, number, name, description, type_name, created_at, updated_at FROM rooms WHERE room_id = ?";
+        std::string sql = "SELECT room_id, hotel_id, number, name, description, type_name, price_per_day, created_at, updated_at FROM rooms WHERE room_id = ?";
         sqlite3_stmt* stmt;
         Room room;
         
@@ -119,16 +237,68 @@ public:
             sqlite3_bind_int64(stmt, 1, id);
             if (sqlite3_step(stmt) == SQLITE_ROW) {
                 room.room_id = sqlite3_column_int64(stmt, 0);
-                room.number = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-                room.name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
-                room.description = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
-                room.type_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
-                room.created_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
-                room.updated_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+                room.hotel_id = sqlite3_column_int64(stmt, 1);
+                room.number = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+                room.name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+                room.description = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+                room.type_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
+                room.price_per_day = sqlite3_column_double(stmt, 6);
+                room.created_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 7));
+                room.updated_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 8));
             }
         }
         sqlite3_finalize(stmt);
         return room;
+    }
+
+    std::vector<Room> get_rooms_by_hotel(int64_t hotel_id) {
+        std::vector<Room> rooms;
+        std::string sql = "SELECT room_id, hotel_id, number, name, description, type_name, price_per_day, created_at, updated_at FROM rooms WHERE hotel_id = ? ORDER BY number";
+        sqlite3_stmt* stmt;
+        
+        if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int64(stmt, 1, hotel_id);
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                Room room;
+                room.room_id = sqlite3_column_int64(stmt, 0);
+                room.hotel_id = sqlite3_column_int64(stmt, 1);
+                room.number = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+                room.name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+                room.description = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+                room.type_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
+                room.price_per_day = sqlite3_column_double(stmt, 6);
+                room.created_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 7));
+                room.updated_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 8));
+                rooms.push_back(room);
+            }
+        }
+        sqlite3_finalize(stmt);
+        return rooms;
+    }
+
+    int64_t create_room(const Room& room) {
+        std::string now = get_current_datetime();
+        std::string sql = "INSERT INTO rooms (hotel_id, number, name, description, type_name, price_per_day, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+        sqlite3_stmt* stmt;
+        
+        if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int64(stmt, 1, room.hotel_id);
+            sqlite3_bind_text(stmt, 2, room.number.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 3, room.name.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 4, room.description.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 5, room.type_name.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_double(stmt, 6, room.price_per_day);
+            sqlite3_bind_text(stmt, 7, now.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 8, now.c_str(), -1, SQLITE_STATIC);
+            
+            if (sqlite3_step(stmt) != SQLITE_DONE) {
+                sqlite3_finalize(stmt);
+                throw std::runtime_error("Failed to create room");
+            }
+        }
+        int64_t id = sqlite3_last_insert_rowid(db);
+        sqlite3_finalize(stmt);
+        return id;
     }
 
     std::vector<std::string> get_room_types() {
@@ -406,6 +576,192 @@ public:
         }
         sqlite3_finalize(stmt);
         return count;
+    }
+
+    // User operations
+    int64_t create_user(const User& user) {
+        std::string now = get_current_datetime();
+        std::string sql = "INSERT INTO users (full_name, phone, email, password, user_type, organization_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+        sqlite3_stmt* stmt;
+        
+        if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, user.full_name.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 2, user.phone.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 3, user.email.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 4, user.password.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 5, user.user_type.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 6, user.organization_name.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 7, now.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 8, now.c_str(), -1, SQLITE_STATIC);
+            
+            if (sqlite3_step(stmt) != SQLITE_DONE) {
+                sqlite3_finalize(stmt);
+                throw std::runtime_error("Failed to create user");
+            }
+        }
+        int64_t id = sqlite3_last_insert_rowid(db);
+        sqlite3_finalize(stmt);
+        return id;
+    }
+
+    User get_user_by_email(const std::string& email) {
+        std::string sql = "SELECT user_id, full_name, phone, email, password, user_type, organization_name, created_at, updated_at FROM users WHERE email = ?";
+        sqlite3_stmt* stmt;
+        User user;
+        
+        if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, email.c_str(), -1, SQLITE_STATIC);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                user.user_id = sqlite3_column_int64(stmt, 0);
+                user.full_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                user.phone = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+                user.email = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+                user.password = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+                user.user_type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
+                const char* org_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+                user.organization_name = org_name ? org_name : "";
+                user.created_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 7));
+                user.updated_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 8));
+            }
+        }
+        sqlite3_finalize(stmt);
+        return user;
+    }
+
+    User get_user(int64_t id) {
+        std::string sql = "SELECT user_id, full_name, phone, email, password, user_type, organization_name, created_at, updated_at FROM users WHERE user_id = ?";
+        sqlite3_stmt* stmt;
+        User user;
+        
+        if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int64(stmt, 1, id);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                user.user_id = sqlite3_column_int64(stmt, 0);
+                user.full_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                user.phone = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+                user.email = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+                user.password = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+                user.user_type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
+                const char* org_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+                user.organization_name = org_name ? org_name : "";
+                user.created_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 7));
+                user.updated_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 8));
+            }
+        }
+        sqlite3_finalize(stmt);
+        return user;
+    }
+
+    void update_user(const User& user) {
+        std::string now = get_current_datetime();
+        std::string sql = "UPDATE users SET full_name = ?, phone = ?, email = ?, user_type = ?, organization_name = ?, updated_at = ? WHERE user_id = ?";
+        sqlite3_stmt* stmt;
+        
+        if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, user.full_name.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 2, user.phone.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 3, user.email.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 4, user.user_type.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 5, user.organization_name.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 6, now.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_int64(stmt, 7, user.user_id);
+            
+            if (sqlite3_step(stmt) != SQLITE_DONE) {
+                sqlite3_finalize(stmt);
+                throw std::runtime_error("Failed to update user");
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    void update_user_password(int64_t user_id, const std::string& new_password) {
+        std::string now = get_current_datetime();
+        std::string sql = "UPDATE users SET password = ?, updated_at = ? WHERE user_id = ?";
+        sqlite3_stmt* stmt;
+        
+        if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, new_password.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 2, now.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_int64(stmt, 3, user_id);
+            
+            if (sqlite3_step(stmt) != SQLITE_DONE) {
+                sqlite3_finalize(stmt);
+                throw std::runtime_error("Failed to update password");
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    // Hotel operations
+    int64_t create_hotel(const Hotel& hotel) {
+        std::string now = get_current_datetime();
+        std::string sql = "INSERT INTO hotels (organization_id, name, description, address, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)";
+        sqlite3_stmt* stmt;
+        
+        if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int64(stmt, 1, hotel.organization_id);
+            sqlite3_bind_text(stmt, 2, hotel.name.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 3, hotel.description.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 4, hotel.address.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 5, now.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 6, now.c_str(), -1, SQLITE_STATIC);
+            
+            if (sqlite3_step(stmt) != SQLITE_DONE) {
+                sqlite3_finalize(stmt);
+                throw std::runtime_error("Failed to create hotel");
+            }
+        }
+        int64_t id = sqlite3_last_insert_rowid(db);
+        sqlite3_finalize(stmt);
+        return id;
+    }
+
+    std::vector<Hotel> get_hotels_by_organization(int64_t organization_id) {
+        std::vector<Hotel> hotels;
+        std::string sql = "SELECT hotel_id, organization_id, name, description, address, created_at, updated_at FROM hotels WHERE organization_id = ? ORDER BY name";
+        sqlite3_stmt* stmt;
+        
+        if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int64(stmt, 1, organization_id);
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                Hotel hotel;
+                hotel.hotel_id = sqlite3_column_int64(stmt, 0);
+                hotel.organization_id = sqlite3_column_int64(stmt, 1);
+                hotel.name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+                const char* desc = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+                hotel.description = desc ? desc : "";
+                const char* addr = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+                hotel.address = addr ? addr : "";
+                hotel.created_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
+                hotel.updated_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+                hotels.push_back(hotel);
+            }
+        }
+        sqlite3_finalize(stmt);
+        return hotels;
+    }
+
+    Hotel get_hotel(int64_t id) {
+        std::string sql = "SELECT hotel_id, organization_id, name, description, address, created_at, updated_at FROM hotels WHERE hotel_id = ?";
+        sqlite3_stmt* stmt;
+        Hotel hotel;
+        
+        if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int64(stmt, 1, id);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                hotel.hotel_id = sqlite3_column_int64(stmt, 0);
+                hotel.organization_id = sqlite3_column_int64(stmt, 1);
+                hotel.name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+                const char* desc = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+                hotel.description = desc ? desc : "";
+                const char* addr = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+                hotel.address = addr ? addr : "";
+                hotel.created_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
+                hotel.updated_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+            }
+        }
+        sqlite3_finalize(stmt);
+        return hotel;
     }
 };
 

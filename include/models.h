@@ -9,10 +9,12 @@
 
 struct Room {
     int64_t room_id = 0;
+    int64_t hotel_id = 0;  // ID отеля, к которому относится номер
     std::string number;
     std::string name;
     std::string description;
     std::string type_name;
+    double price_per_day = 0.0;  // Цена за день проживания
     std::string created_at;
     std::string updated_at;
 
@@ -67,6 +69,36 @@ struct Booking {
     std::string to_string() const {
         return "Бронирование #" + std::to_string(booking_id);
     }
+};
+
+struct User {
+    int64_t user_id = 0;
+    std::string full_name;  // ФИО
+    std::string phone;
+    std::string email;
+    std::string password;
+    std::string user_type;  // "user" или "organization"
+    std::string organization_name;  // только для организаций
+    std::string created_at;
+    std::string updated_at;
+
+    User() = default;
+    
+    bool is_organization() const {
+        return user_type == "organization";
+    }
+};
+
+struct Hotel {
+    int64_t hotel_id = 0;
+    int64_t organization_id = 0;  // ID пользователя-организации
+    std::string name;
+    std::string description;
+    std::string address;
+    std::string created_at;
+    std::string updated_at;
+
+    Hotel() = default;
 };
 
 // Утилита для получения текущей даты/времени
