@@ -67,6 +67,9 @@ public:
             if (user->is_organization()) {
                 html << R"(
                     <li class="nav-item"><a class="nav-link" href="/organization/dashboard/"><i class="bi bi-building"></i> Панель</a></li>)";
+            } else {
+                html << R"(
+                    <li class="nav-item"><a class="nav-link" href="/my-bookings/"><i class="bi bi-calendar-check"></i> Мои бронирования</a></li>)";
             }
             html << R"(
                     <li class="nav-item"><a class="nav-link" href="/logout/"><i class="bi bi-box-arrow-right"></i> Выход</a></li>)";
@@ -357,8 +360,8 @@ public:
         return base_template("Номер " + room.number + " - Система бронирования отелей", content.str());
     }
 
-    static std::string guests_list(Database& db, const std::string& search = "") {
-        auto guests = db.get_all_guests(search);
+    static std::string guests_list(Database& db, const std::string& search = "", int64_t user_id = 0) {
+        auto guests = db.get_all_guests(search, user_id);
 
         std::ostringstream content;
         content << R"(
@@ -534,7 +537,7 @@ public:
         return base_template("Добавить гостя - Система бронирования отелей", content.str());
     }
 
-    static std::string bookings_list(Database& db, const std::string& search = "") {
+    static std::string bookings_list(Database& db, const std::string& search = "", const User* user = nullptr) {
         auto bookings = db.get_all_bookings(search);
 
         std::ostringstream content;
@@ -637,9 +640,9 @@ public:
         return base_template("Бронирование #" + std::to_string(booking_id) + " - Система бронирования отелей", content.str());
     }
 
-    static std::string booking_form(Database& db, const std::string& error = "", const Booking& booking = Booking(), const Guest& guest = Guest()) {
+    static std::string booking_form(Database& db, const std::string& error = "", const Booking& booking = Booking(), const Guest& guest = Guest(), int64_t user_id = 0) {
         auto rooms = db.get_all_rooms();
-        auto guests = db.get_all_guests();
+        auto guests = db.get_all_guests("", user_id);
         if (guests.size() > 10) {
             guests.resize(10);
         }
@@ -905,6 +908,7 @@ if (userType.value === 'organization') {
 <div class="row mb-4">
     <div class="col-12">
         <a href="/hotels/create/" class="btn btn-primary">Создать отель</a>
+        <a href="/organization/rooms/" class="btn btn-success">Управление номерами</a>
     </div>
 </div>
 
@@ -926,6 +930,7 @@ if (userType.value === 'organization') {
                 <p class="text-muted">Адрес: )" << escape_html(hotel.address) << R"(</p>
                 <p class="text-muted">Номеров: )" << rooms.size() << R"(</p>
                 <a href="/hotels/)" << hotel.hotel_id << R"(/rooms/create/" class="btn btn-primary">Добавить номер</a>
+                <a href="/hotels/)" << hotel.hotel_id << R"(/bookings/" class="btn btn-info">Бронирования</a>
                 <a href="/organization/dashboard/" class="btn btn-secondary">Назад</a>
             </div>
         </div>)";
@@ -1051,6 +1056,22 @@ if (userType.value === 'organization') {
             </div>
         </div>
 
+        )";
+        
+        if (!user.is_organization()) {
+            content << R"(
+        <div class="card mb-4">
+            <div class="card-body">
+                <h3>Мои бронирования</h3>
+                <p>Просмотрите и управляйте своими бронированиями</p>
+                <a href="/my-bookings/" class="btn btn-primary">Перейти к бронированиям</a>
+            </div>
+        </div>
+        )";
+        }
+        
+        content << R"(
+
         <div class="card">
             <div class="card-body">
                 <h3>Изменить данные</h3>
@@ -1135,6 +1156,381 @@ if (userType.value === 'organization') {
 </div>)";
 
         return base_template("Вход - Система бронирования отелей", content.str());
+    }
+
+    // Страницы для управления номерами организации
+    static std::string organization_rooms_list(Database& db, int64_t organization_id, const std::string& error = "", const std::string& success = "", const User* user = nullptr) {
+        auto hotels = db.get_hotels_by_organization(organization_id);
+        
+        std::ostringstream content;
+        content << R"(
+<div class="row mb-4">
+    <div class="col-12">
+        <h1>Мои номера</h1>)";
+        
+        if (!error.empty()) {
+            content << R"(
+        <div class="alert alert-danger">)" << escape_html(error) << R"(</div>)";
+        }
+        
+        if (!success.empty()) {
+            content << R"(
+        <div class="alert alert-success">)" << escape_html(success) << R"(</div>)";
+        }
+        
+        content << R"(
+    </div>
+</div>
+
+<div class="row">)";
+        
+        if (hotels.empty()) {
+            content << R"(
+    <div class="col-12">
+        <p class="text-muted">У вас пока нет отелей. Создайте отель и добавьте номера!</p>
+    </div>)";
+        } else {
+            for (const auto& hotel : hotels) {
+                auto rooms = db.get_rooms_by_hotel(hotel.hotel_id);
+                content << R"(
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h3>)" << escape_html(hotel.name) << R"(</h3>
+            </div>
+            <div class="card-body">)";
+                
+                if (rooms.empty()) {
+                    content << R"(
+                <p class="text-muted">В этом отеле пока нет номеров.</p>
+                <a href="/hotels/)" << hotel.hotel_id << R"(/rooms/create/" class="btn btn-primary">Добавить номер</a>)";
+                } else {
+                    content << R"(
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Номер</th>
+                            <th>Название</th>
+                            <th>Тип</th>
+                            <th>Цена за день</th>
+                            <th>Действия</th>
+                        </tr>
+                    </thead>
+                    <tbody>)";
+                    for (const auto& room : rooms) {
+                        content << R"(
+                        <tr>
+                            <td>)" << escape_html(room.number) << R"(</td>
+                            <td>)" << escape_html(room.name) << R"(</td>
+                            <td>)" << escape_html(room.type_name) << R"(</td>
+                            <td>)" << std::fixed << std::setprecision(2) << room.price_per_day << R"( руб.</td>
+                            <td>
+                                <a href="/rooms/)" << room.room_id << R"(/edit/" class="btn btn-sm btn-primary">Редактировать</a>
+                                <a href="/rooms/)" << room.room_id << R"(/delete/" class="btn btn-sm btn-danger" onclick=\"return confirm('Вы уверены, что хотите удалить этот номер?')\">Удалить</a>
+                            </td>
+                        </tr>)";
+                    }
+                    content << R"(
+                    </tbody>
+                </table>
+                <a href="/hotels/)" << hotel.hotel_id << R"(/rooms/create/" class="btn btn-primary">Добавить номер</a>)";
+                }
+                content << R"(
+            </div>
+        </div>
+    </div>)";
+            }
+        }
+        
+        content << R"(
+</div>
+<div class="row mt-4">
+    <div class="col-12">
+        <a href="/organization/dashboard/" class="btn btn-secondary">Назад к панели</a>
+    </div>
+</div>)";
+
+        return base_template("Мои номера - Система бронирования отелей", content.str(), "", user);
+    }
+
+    static std::string room_edit_form(Database& db, int64_t room_id, const std::string& error = "", const Room& room = Room(), const User* user = nullptr) {
+        Room room_data = room.room_id == 0 ? db.get_room(room_id) : room;
+        if (room_data.room_id == 0) {
+            return base_template("Ошибка", "<div class='alert alert-danger'>Номер не найден</div>", "", user);
+        }
+        
+        std::ostringstream content;
+        content << R"(
+<div class="row">
+    <div class="col-md-8">
+        <h1>Редактировать номер</h1>)";
+        if (!error.empty()) {
+            content << R"(
+        <div class="alert alert-danger">)" << escape_html(error) << R"(</div>)";
+        }
+        content << R"(
+        <form method="POST" action="/rooms/)" << room_id << R"(/edit/">
+            <div class="mb-3">
+                <label class="form-label">Номер комнаты *</label>
+                <input type="text" name="number" class="form-control" value=")" << escape_html(room_data.number) << R"(" required>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Название *</label>
+                <input type="text" name="name" class="form-control" value=")" << escape_html(room_data.name) << R"(" required>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Описание</label>
+                <textarea name="description" class="form-control" rows="4">)" << escape_html(room_data.description) << R"(</textarea>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Тип номера *</label>
+                <input type="text" name="type_name" class="form-control" value=")" << escape_html(room_data.type_name) << R"(" required>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Цена за день (руб.) *</label>
+                <input type="number" name="price_per_day" class="form-control" value=")" << std::fixed << std::setprecision(2) << room_data.price_per_day << R"(" step="0.01" min="0" required>
+            </div>
+            <button type="submit" class="btn btn-primary">Сохранить изменения</button>
+            <a href="/organization/rooms/" class="btn btn-secondary">Отмена</a>
+        </form>
+    </div>
+</div>)";
+
+        return base_template("Редактировать номер - Система бронирования отелей", content.str(), "", user);
+    }
+
+    static std::string hotel_bookings_list(Database& db, int64_t hotel_id, const std::string& error = "", const std::string& success = "", const User* user = nullptr) {
+        Hotel hotel = db.get_hotel(hotel_id);
+        if (hotel.hotel_id == 0) {
+            return base_template("Ошибка", "<div class='alert alert-danger'>Отель не найден</div>", "", user);
+        }
+        
+        auto bookings = db.get_bookings_by_hotel(hotel_id);
+        
+        std::ostringstream content;
+        content << R"(
+<div class="row mb-4">
+    <div class="col-12">
+        <h1>Бронирования отеля: )" << escape_html(hotel.name) << R"(</h1>)";
+        
+        if (!error.empty()) {
+            content << R"(
+        <div class="alert alert-danger">)" << escape_html(error) << R"(</div>)";
+        }
+        
+        if (!success.empty()) {
+            content << R"(
+        <div class="alert alert-success">)" << escape_html(success) << R"(</div>)";
+        }
+        
+        content << R"(
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Гость</th>
+                    <th>Номер</th>
+                    <th>Заезд</th>
+                    <th>Выезд</th>
+                    <th>Стоимость</th>
+                    <th>Действия</th>
+                </tr>
+            </thead>
+            <tbody>)";
+        
+        if (bookings.empty()) {
+            content << R"(
+                <tr>
+                    <td colspan="7" class="text-center text-muted">Бронирования не найдены</td>
+                </tr>)";
+        } else {
+            for (const auto& booking : bookings) {
+                Guest guest = db.get_guest(booking.guest_id);
+                Room room = db.get_room(booking.room_id);
+                content << R"(
+                <tr>
+                    <td>)" << booking.booking_id << R"(</td>
+                    <td>)" << escape_html(guest.full_name()) << R"(</td>
+                    <td>)" << escape_html(room.number) << R"(</td>
+                    <td>)" << escape_html(booking.check_in_date) << R"(</td>
+                    <td>)" << escape_html(booking.check_out_date) << R"(</td>
+                    <td>)" << std::fixed << std::setprecision(2) << booking.total_price << R"( руб.</td>
+                    <td>
+                        <a href="/bookings/)" << booking.booking_id << R"(/edit/" class="btn btn-sm btn-primary">Редактировать</a>
+                        <a href="/bookings/)" << booking.booking_id << R"(/" class="btn btn-sm btn-secondary">Подробнее</a>
+                    </td>
+                </tr>)";
+            }
+        }
+        
+        content << R"(
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-12">
+        <a href="/organization/dashboard/" class="btn btn-secondary">Назад к панели</a>
+    </div>
+</div>)";
+
+        return base_template("Бронирования отеля - Система бронирования отелей", content.str(), "", user);
+    }
+
+    static std::string booking_edit_form(Database& db, int64_t booking_id, const std::string& error = "", const Booking& booking = Booking(), const User* user = nullptr) {
+        Booking booking_data = booking.booking_id == 0 ? db.get_booking(booking_id) : booking;
+        if (booking_data.booking_id == 0) {
+            return base_template("Ошибка", "<div class='alert alert-danger'>Бронирование не найдено</div>", "", user);
+        }
+        
+        Guest guest = db.get_guest(booking_data.guest_id);
+        Room room = db.get_room(booking_data.room_id);
+        auto rooms = db.get_rooms_by_hotel(room.hotel_id);
+        
+        std::ostringstream content;
+        content << R"(
+<div class="row">
+    <div class="col-12">
+        <h1>Редактировать бронирование</h1>)";
+        if (!error.empty()) {
+            content << R"(
+        <div class="alert alert-danger">)" << escape_html(error) << R"(</div>)";
+        }
+        content << R"(
+        <form method="POST" action="/bookings/)" << booking_id << R"(/edit/">
+            <div class="row">
+                <div class="col-md-6">
+                    <h3>Информация о госте</h3>
+                    <p><strong>Гость:</strong> )" << escape_html(guest.full_name()) << R"(</p>
+                    <p><strong>Телефон:</strong> )" << escape_html(guest.phone) << R"(</p>
+                    <p><strong>Email:</strong> )" << escape_html(guest.email) << R"(</p>
+                </div>
+                <div class="col-md-6">
+                    <h3>Информация о бронировании</h3>
+                    <div class="mb-3">
+                        <label class="form-label">Номер *</label>
+                        <select name="room_id" class="form-select" required>)";
+        for (const auto& r : rooms) {
+            content << R"(
+                            <option value=")" << r.room_id << R"(")" << (r.room_id == booking_data.room_id ? " selected" : "") << R"(>)" << escape_html(r.number) << " - " << escape_html(r.name) << R"(</option>)";
+        }
+        content << R"(
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Дата заезда *</label>
+                        <input type="date" name="check_in_date" class="form-control" value=")" << escape_html(booking_data.check_in_date) << R"(" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Дата выезда *</label>
+                        <input type="date" name="check_out_date" class="form-control" value=")" << escape_html(booking_data.check_out_date) << R"(" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Количество взрослых *</label>
+                        <input type="number" name="adults_count" class="form-control" value=")" << booking_data.adults_count << R"(" min="1" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Количество детей</label>
+                        <input type="number" name="children_count" class="form-control" value=")" << booking_data.children_count << R"(" min="0">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Пожелания</label>
+                        <textarea name="special_requests" class="form-control" rows="4">)" << escape_html(booking_data.special_requests) << R"(</textarea>
+                    </div>
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary">Сохранить изменения</button>
+            <a href="/hotels/)" << room.hotel_id << R"(/bookings/" class="btn btn-secondary">Отмена</a>
+        </form>
+    </div>
+</div>)";
+
+        return base_template("Редактировать бронирование - Система бронирования отелей", content.str(), "", user);
+    }
+
+    static std::string user_bookings_list(Database& db, int64_t user_id, const std::string& error = "", const std::string& success = "", const User* user = nullptr) {
+        auto bookings = db.get_bookings_by_user(user_id);
+        
+        std::ostringstream content;
+        content << R"(
+<div class="row mb-4">
+    <div class="col-12">
+        <h1>Мои бронирования</h1>)";
+        
+        if (!error.empty()) {
+            content << R"(
+        <div class="alert alert-danger">)" << escape_html(error) << R"(</div>)";
+        }
+        
+        if (!success.empty()) {
+            content << R"(
+        <div class="alert alert-success">)" << escape_html(success) << R"(</div>)";
+        }
+        
+        content << R"(
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Гость</th>
+                    <th>Номер</th>
+                    <th>Заезд</th>
+                    <th>Выезд</th>
+                    <th>Стоимость</th>
+                    <th>Действия</th>
+                </tr>
+            </thead>
+            <tbody>)";
+        
+        if (bookings.empty()) {
+            content << R"(
+                <tr>
+                    <td colspan="7" class="text-center text-muted">У вас пока нет бронирований</td>
+                </tr>)";
+        } else {
+            for (const auto& booking : bookings) {
+                Guest guest = db.get_guest(booking.guest_id);
+                Room room = db.get_room(booking.room_id);
+                content << R"(
+                <tr>
+                    <td>)" << booking.booking_id << R"(</td>
+                    <td>)" << escape_html(guest.full_name()) << R"(</td>
+                    <td>)" << escape_html(room.number) << R"(</td>
+                    <td>)" << escape_html(booking.check_in_date) << R"(</td>
+                    <td>)" << escape_html(booking.check_out_date) << R"(</td>
+                    <td>)" << std::fixed << std::setprecision(2) << booking.total_price << R"( руб.</td>
+                    <td>
+                        <a href="/bookings/)" << booking.booking_id << R"(/" class="btn btn-sm btn-primary">Подробнее</a>
+                        <a href="/bookings/)" << booking.booking_id << R"(/cancel/" class="btn btn-sm btn-danger" onclick=\"return confirm('Вы уверены, что хотите отменить это бронирование?')\">Отменить</a>
+                    </td>
+                </tr>)";
+            }
+        }
+        
+        content << R"(
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-12">
+        <a href="/profile/" class="btn btn-secondary">Назад к профилю</a>
+    </div>
+</div>)";
+
+        return base_template("Мои бронирования - Система бронирования отелей", content.str(), "", user);
     }
 };
 

@@ -27,6 +27,7 @@ struct Room {
 
 struct Guest {
     int64_t guest_id = 0;
+    int64_t user_id = 0;  // ID пользователя, который зарегистрировал гостя
     std::string first_name;
     std::string last_name;
     std::string middle_name;

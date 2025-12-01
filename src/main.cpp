@@ -159,11 +159,12 @@ int main() {
 
         // Список гостей
         svr.Get("/guests/", [&db](const Request& req, Response& res) {
+            int64_t user_id = get_user_id_from_session(req);
             std::string search = "";
             if (req.has_param("search")) {
                 search = url_decode(req.get_param_value("search"));
             }
-            res.set_content(HtmlGenerator::guests_list(db, search), "text/html; charset=utf-8");
+            res.set_content(HtmlGenerator::guests_list(db, search, user_id), "text/html; charset=utf-8");
         });
 
         // Форма создания гостя (GET)
@@ -173,9 +174,11 @@ int main() {
 
         // Создание гостя (POST)
         svr.Post("/guests/create/", [&db](const Request& req, Response& res) {
+            int64_t user_id = get_user_id_from_session(req);
             auto params = parse_form_data(req.body);
             
             Guest guest;
+            guest.user_id = user_id;  // Связываем гостя с пользователем
             guest.first_name = params.count("first_name") ? params["first_name"] : "";
             guest.last_name = params.count("last_name") ? params["last_name"] : "";
             guest.middle_name = params.count("middle_name") ? params["middle_name"] : "";
@@ -192,10 +195,12 @@ int main() {
 
             try {
                 int64_t guest_id = db.create_guest(guest);
+                std::cerr << "[INFO] " << get_current_datetime() << " - Guest created successfully: ID=" << guest_id << ", user_id=" << guest.user_id << std::endl;
                 res.set_header("Location", "/guests/");
                 res.status = 302;
             } catch (const std::exception& e) {
                 std::string error = "Ошибка при создании гостя: " + std::string(e.what());
+                std::cerr << "[ERROR] " << get_current_datetime() << " - Failed to create guest: " << e.what() << std::endl;
                 res.set_content(HtmlGenerator::guest_form(error, guest), "text/html; charset=utf-8");
             }
         });
@@ -206,17 +211,20 @@ int main() {
             res.set_content(HtmlGenerator::guest_detail(db, guest_id), "text/html; charset=utf-8");
         });
 
-        // Список бронирований
+        // Список бронирований (только для просмотра, без редактирования)
         svr.Get("/bookings/", [&db](const Request& req, Response& res) {
             std::string search = "";
             if (req.has_param("search")) {
                 search = url_decode(req.get_param_value("search"));
             }
-            res.set_content(HtmlGenerator::bookings_list(db, search), "text/html; charset=utf-8");
+            int64_t user_id = get_user_id_from_session(req);
+            User user = user_id > 0 ? db.get_user(user_id) : User();
+            res.set_content(HtmlGenerator::bookings_list(db, search, &user), "text/html; charset=utf-8");
         });
 
         // Форма создания бронирования (GET)
         svr.Get("/bookings/create/", [&db](const Request& req, Response& res) {
+            int64_t user_id = get_user_id_from_session(req);
             Booking booking;
             if (req.has_param("room")) {
                 booking.room_id = std::stoll(url_decode(req.get_param_value("room")));
@@ -227,11 +235,12 @@ int main() {
             if (req.has_param("check_out")) {
                 booking.check_out_date = url_decode(req.get_param_value("check_out"));
             }
-            res.set_content(HtmlGenerator::booking_form(db, "", booking), "text/html; charset=utf-8");
+            res.set_content(HtmlGenerator::booking_form(db, "", booking, Guest(), user_id), "text/html; charset=utf-8");
         });
 
         // Создание бронирования (POST)
         svr.Post("/bookings/create/", [&db](const Request& req, Response& res) {
+            int64_t user_id = get_user_id_from_session(req);
             auto params = parse_form_data(req.body);
             
             Booking booking;
@@ -245,16 +254,18 @@ int main() {
                 try {
                     guest_id = std::stoll(guest_id_str);
                     guest = db.get_guest(guest_id);
-                    if (guest.guest_id == 0) {
-                        res.set_content(HtmlGenerator::booking_form(db, "Выбранный гость не найден", booking, guest), "text/html; charset=utf-8");
+                    if (guest.guest_id == 0 || (user_id > 0 && guest.user_id != user_id)) {
+                        res.set_content(HtmlGenerator::booking_form(db, "Выбранный гость не найден", booking, guest, user_id), "text/html; charset=utf-8");
                         return;
                     }
                 } catch (...) {
-                    res.set_content(HtmlGenerator::booking_form(db, "Неверный ID гостя", booking, guest), "text/html; charset=utf-8");
+                    res.set_content(HtmlGenerator::booking_form(db, "Неверный ID гостя", booking, guest, user_id), "text/html; charset=utf-8");
                     return;
                 }
             } else {
                 // Создаем нового гостя
+                int64_t user_id = get_user_id_from_session(req);
+                guest.user_id = user_id;  // Связываем гостя с пользователем
                 guest.first_name = params.count("first_name") ? params["first_name"] : "";
                 guest.last_name = params.count("last_name") ? params["last_name"] : "";
                 guest.middle_name = params.count("middle_name") ? params["middle_name"] : "";
@@ -265,7 +276,7 @@ int main() {
                 if (guest.first_name.empty() || guest.last_name.empty() || 
                     guest.passport_number.empty() || guest.phone.empty()) {
                     std::string error = "Заполните все обязательные поля гостя";
-                    res.set_content(HtmlGenerator::booking_form(db, error, booking, guest), "text/html; charset=utf-8");
+                    res.set_content(HtmlGenerator::booking_form(db, error, booking, guest, user_id), "text/html; charset=utf-8");
                     return;
                 }
 
@@ -273,7 +284,8 @@ int main() {
                     guest_id = db.create_guest(guest);
                 } catch (const std::exception& e) {
                     std::string error = "Ошибка при создании гостя: " + std::string(e.what());
-                    res.set_content(HtmlGenerator::booking_form(db, error, booking, guest), "text/html; charset=utf-8");
+                    std::cerr << "[ERROR] " << get_current_datetime() << " - Failed to create guest in booking: " << e.what() << std::endl;
+                    res.set_content(HtmlGenerator::booking_form(db, error, booking, guest, user_id), "text/html; charset=utf-8");
                     return;
                 }
             }
@@ -281,7 +293,7 @@ int main() {
             // Заполняем данные бронирования
             std::string room_id_str = params.count("room_id") ? params["room_id"] : "";
             if (room_id_str.empty()) {
-                res.set_content(HtmlGenerator::booking_form(db, "Выберите номер", booking, guest), "text/html; charset=utf-8");
+                res.set_content(HtmlGenerator::booking_form(db, "Выберите номер", booking, guest, user_id), "text/html; charset=utf-8");
                 return;
             }
             
@@ -292,24 +304,24 @@ int main() {
                 booking.check_out_date = params.count("check_out_date") ? params["check_out_date"] : "";
                 
                 if (booking.check_in_date.empty() || booking.check_out_date.empty()) {
-                    res.set_content(HtmlGenerator::booking_form(db, "Укажите даты заезда и выезда", booking, guest), "text/html; charset=utf-8");
+                    res.set_content(HtmlGenerator::booking_form(db, "Укажите даты заезда и выезда", booking, guest, user_id), "text/html; charset=utf-8");
                     return;
                 }
 
                 // Валидация дат
                 if (!date_less(booking.check_in_date, booking.check_out_date)) {
-                    res.set_content(HtmlGenerator::booking_form(db, "Дата заезда должна быть раньше даты выезда", booking, guest), "text/html; charset=utf-8");
+                    res.set_content(HtmlGenerator::booking_form(db, "Дата заезда должна быть раньше даты выезда", booking, guest, user_id), "text/html; charset=utf-8");
                     return;
                 }
 
                 if (date_less(booking.check_in_date, get_current_date())) {
-                    res.set_content(HtmlGenerator::booking_form(db, "Дата заезда не может быть в прошлом", booking, guest), "text/html; charset=utf-8");
+                    res.set_content(HtmlGenerator::booking_form(db, "Дата заезда не может быть в прошлом", booking, guest, user_id), "text/html; charset=utf-8");
                     return;
                 }
 
                 // Проверка доступности номера
                 if (!db.is_room_available(booking.room_id, booking.check_in_date, booking.check_out_date)) {
-                    res.set_content(HtmlGenerator::booking_form(db, "Номер занят на выбранные даты", booking, guest), "text/html; charset=utf-8");
+                    res.set_content(HtmlGenerator::booking_form(db, "Номер занят на выбранные даты", booking, guest, user_id), "text/html; charset=utf-8");
                     return;
                 }
 
@@ -328,7 +340,7 @@ int main() {
                 // Получаем номер для расчета стоимости
                 Room room = db.get_room(booking.room_id);
                 if (room.room_id == 0) {
-                    res.set_content(HtmlGenerator::booking_form(db, "Номер не найден", booking, guest), "text/html; charset=utf-8");
+                    res.set_content(HtmlGenerator::booking_form(db, "Номер не найден", booking, guest, user_id), "text/html; charset=utf-8");
                     return;
                 }
 
@@ -355,7 +367,7 @@ int main() {
                 res.status = 302;
             } catch (const std::exception& e) {
                 std::string error = "Ошибка при создании бронирования: " + std::string(e.what());
-                res.set_content(HtmlGenerator::booking_form(db, error, booking, guest), "text/html; charset=utf-8");
+                res.set_content(HtmlGenerator::booking_form(db, error, booking, guest, user_id), "text/html; charset=utf-8");
             }
         });
 
@@ -432,6 +444,7 @@ int main() {
                 res.status = 302;
             } catch (const std::exception& e) {
                 std::string error = "Ошибка при регистрации: " + std::string(e.what());
+                std::cerr << "[ERROR] " << get_current_datetime() << " - Failed to register user: " << e.what() << std::endl;
                 res.set_content(HtmlGenerator::registration_form(error, user), "text/html; charset=utf-8");
             }
         });
@@ -505,6 +518,7 @@ int main() {
                 res.status = 302;
             } catch (const std::exception& e) {
                 std::string error = "Ошибка при создании отеля: " + std::string(e.what());
+                std::cerr << "[ERROR] " << get_current_datetime() << " - Failed to create hotel: " << e.what() << std::endl;
                 res.set_content(HtmlGenerator::hotel_form(user_id, error, hotel, &user), "text/html; charset=utf-8");
             }
         });
@@ -591,6 +605,7 @@ int main() {
                 res.status = 302;
             } catch (const std::exception& e) {
                 std::string error = "Ошибка при создании номера: " + std::string(e.what());
+                std::cerr << "[ERROR] " << get_current_datetime() << " - Failed to create room: " << e.what() << std::endl;
                 User user = db.get_user(user_id);
                 res.set_content(HtmlGenerator::room_form_for_hotel(db, hotel_id, hotel.organization_id, error, room, &user), "text/html; charset=utf-8");
             }
@@ -730,6 +745,7 @@ int main() {
                 res.status = 302;
             } catch (const std::exception& e) {
                 std::string error = "Ошибка при обновлении данных: " + std::string(e.what());
+                std::cerr << "[ERROR] " << get_current_datetime() << " - Failed to update user profile: " << e.what() << std::endl;
                 res.set_content(HtmlGenerator::profile_page(user, error), "text/html; charset=utf-8");
             }
         });
@@ -781,7 +797,354 @@ int main() {
                 res.status = 302;
             } catch (const std::exception& e) {
                 std::string error = "Ошибка при изменении пароля: " + std::string(e.what());
+                std::cerr << "[ERROR] " << get_current_datetime() << " - Failed to update password: " << e.what() << std::endl;
                 res.set_content(HtmlGenerator::profile_page(user, error), "text/html; charset=utf-8");
+            }
+        });
+
+        // Управление номерами организации
+        svr.Get("/organization/rooms/", [&db](const Request& req, Response& res) {
+            int64_t user_id = get_user_id_from_session(req);
+            if (user_id == 0) {
+                res.set_header("Location", "/login/");
+                res.status = 302;
+                return;
+            }
+            
+            User user = db.get_user(user_id);
+            if (user.user_id == 0 || !user.is_organization()) {
+                res.set_content(HtmlGenerator::base_template("Ошибка", "<div class='alert alert-danger'>Доступ запрещен</div>", "", &user), "text/html; charset=utf-8");
+                return;
+            }
+            
+            std::string success = "";
+            if (req.has_param("updated")) {
+                success = "Номер успешно обновлен!";
+            } else if (req.has_param("deleted")) {
+                success = "Номер успешно удален!";
+            }
+            
+            res.set_content(HtmlGenerator::organization_rooms_list(db, user_id, "", success, &user), "text/html; charset=utf-8");
+        });
+
+        // Редактирование номера (GET)
+        svr.Get(R"(/rooms/(\d+)/edit/)", [&db](const Request& req, Response& res) {
+            int64_t user_id = get_user_id_from_session(req);
+            if (user_id == 0) {
+                res.set_header("Location", "/login/");
+                res.status = 302;
+                return;
+            }
+            
+            int64_t room_id = std::stoll(req.matches[1]);
+            Room room = db.get_room(room_id);
+            if (room.room_id == 0) {
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::base_template("Ошибка", "<div class='alert alert-danger'>Номер не найден</div>", "", &user), "text/html; charset=utf-8");
+                return;
+            }
+            
+            Hotel hotel = db.get_hotel(room.hotel_id);
+            if (hotel.organization_id != user_id) {
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::base_template("Ошибка", "<div class='alert alert-danger'>У вас нет доступа к этому номеру</div>", "", &user), "text/html; charset=utf-8");
+                return;
+            }
+            
+            User user = db.get_user(user_id);
+            res.set_content(HtmlGenerator::room_edit_form(db, room_id, "", room, &user), "text/html; charset=utf-8");
+        });
+
+        // Редактирование номера (POST)
+        svr.Post(R"(/rooms/(\d+)/edit/)", [&db](const Request& req, Response& res) {
+            int64_t user_id = get_user_id_from_session(req);
+            if (user_id == 0) {
+                res.set_header("Location", "/login/");
+                res.status = 302;
+                return;
+            }
+            
+            int64_t room_id = std::stoll(req.matches[1]);
+            Room room = db.get_room(room_id);
+            if (room.room_id == 0) {
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::base_template("Ошибка", "<div class='alert alert-danger'>Номер не найден</div>", "", &user), "text/html; charset=utf-8");
+                return;
+            }
+            
+            Hotel hotel = db.get_hotel(room.hotel_id);
+            if (hotel.organization_id != user_id) {
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::base_template("Ошибка", "<div class='alert alert-danger'>У вас нет доступа к этому номеру</div>", "", &user), "text/html; charset=utf-8");
+                return;
+            }
+            
+            auto params = parse_form_data(req.body);
+            
+            room.number = params.count("number") ? params["number"] : "";
+            room.name = params.count("name") ? params["name"] : "";
+            room.description = params.count("description") ? params["description"] : "";
+            room.type_name = params.count("type_name") ? params["type_name"] : "";
+            
+            std::string price_str = params.count("price_per_day") ? params["price_per_day"] : "0";
+            try {
+                room.price_per_day = std::stod(price_str);
+                if (room.price_per_day < 0) {
+                    room.price_per_day = 0;
+                }
+            } catch (...) {
+                room.price_per_day = 0;
+            }
+            
+            if (room.number.empty() || room.name.empty() || room.type_name.empty() || room.price_per_day <= 0) {
+                std::string error = "Заполните все обязательные поля";
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::room_edit_form(db, room_id, error, room, &user), "text/html; charset=utf-8");
+                return;
+            }
+            
+            try {
+                db.update_room(room);
+                res.set_header("Location", "/organization/rooms/?updated=1");
+                res.status = 302;
+            } catch (const std::exception& e) {
+                std::string error = "Ошибка при обновлении номера: " + std::string(e.what());
+                std::cerr << "[ERROR] " << get_current_datetime() << " - Failed to update room: " << e.what() << std::endl;
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::room_edit_form(db, room_id, error, room, &user), "text/html; charset=utf-8");
+            }
+        });
+
+        // Удаление номера
+        svr.Get(R"(/rooms/(\d+)/delete/)", [&db](const Request& req, Response& res) {
+            int64_t user_id = get_user_id_from_session(req);
+            if (user_id == 0) {
+                res.set_header("Location", "/login/");
+                res.status = 302;
+                return;
+            }
+            
+            int64_t room_id = std::stoll(req.matches[1]);
+            Room room = db.get_room(room_id);
+            if (room.room_id == 0) {
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::base_template("Ошибка", "<div class='alert alert-danger'>Номер не найден</div>", "", &user), "text/html; charset=utf-8");
+                return;
+            }
+            
+            Hotel hotel = db.get_hotel(room.hotel_id);
+            if (hotel.organization_id != user_id) {
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::base_template("Ошибка", "<div class='alert alert-danger'>У вас нет доступа к этому номеру</div>", "", &user), "text/html; charset=utf-8");
+                return;
+            }
+            
+            try {
+                db.delete_room(room_id);
+                res.set_header("Location", "/organization/rooms/?deleted=1");
+                res.status = 302;
+            } catch (const std::exception& e) {
+                std::cerr << "[ERROR] " << get_current_datetime() << " - Failed to delete room: " << e.what() << std::endl;
+                User user = db.get_user(user_id);
+                std::string error = "Ошибка при удалении номера: " + std::string(e.what());
+                res.set_content(HtmlGenerator::base_template("Ошибка", "<div class='alert alert-danger'>" + error + "</div>", "", &user), "text/html; charset=utf-8");
+            }
+        });
+
+        // Бронирования отеля
+        svr.Get(R"(/hotels/(\d+)/bookings/)", [&db](const Request& req, Response& res) {
+            int64_t user_id = get_user_id_from_session(req);
+            if (user_id == 0) {
+                res.set_header("Location", "/login/");
+                res.status = 302;
+                return;
+            }
+            
+            int64_t hotel_id = std::stoll(req.matches[1]);
+            Hotel hotel = db.get_hotel(hotel_id);
+            if (hotel.hotel_id == 0 || hotel.organization_id != user_id) {
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::base_template("Ошибка", "<div class='alert alert-danger'>Отель не найден или доступ запрещен</div>", "", &user), "text/html; charset=utf-8");
+                return;
+            }
+            
+            std::string success = "";
+            if (req.has_param("updated")) {
+                success = "Бронирование успешно обновлено!";
+            }
+            
+            User user = db.get_user(user_id);
+            res.set_content(HtmlGenerator::hotel_bookings_list(db, hotel_id, "", success, &user), "text/html; charset=utf-8");
+        });
+
+        // Редактирование бронирования (GET)
+        svr.Get(R"(/bookings/(\d+)/edit/)", [&db](const Request& req, Response& res) {
+            int64_t user_id = get_user_id_from_session(req);
+            if (user_id == 0) {
+                res.set_header("Location", "/login/");
+                res.status = 302;
+                return;
+            }
+            
+            int64_t booking_id = std::stoll(req.matches[1]);
+            Booking booking = db.get_booking(booking_id);
+            if (booking.booking_id == 0) {
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::base_template("Ошибка", "<div class='alert alert-danger'>Бронирование не найдено</div>", "", &user), "text/html; charset=utf-8");
+                return;
+            }
+            
+            Room room = db.get_room(booking.room_id);
+            Hotel hotel = db.get_hotel(room.hotel_id);
+            if (hotel.organization_id != user_id) {
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::base_template("Ошибка", "<div class='alert alert-danger'>У вас нет доступа к этому бронированию</div>", "", &user), "text/html; charset=utf-8");
+                return;
+            }
+            
+            User user = db.get_user(user_id);
+            res.set_content(HtmlGenerator::booking_edit_form(db, booking_id, "", booking, &user), "text/html; charset=utf-8");
+        });
+
+        // Редактирование бронирования (POST)
+        svr.Post(R"(/bookings/(\d+)/edit/)", [&db](const Request& req, Response& res) {
+            int64_t user_id = get_user_id_from_session(req);
+            if (user_id == 0) {
+                res.set_header("Location", "/login/");
+                res.status = 302;
+                return;
+            }
+            
+            int64_t booking_id = std::stoll(req.matches[1]);
+            Booking booking = db.get_booking(booking_id);
+            if (booking.booking_id == 0) {
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::base_template("Ошибка", "<div class='alert alert-danger'>Бронирование не найдено</div>", "", &user), "text/html; charset=utf-8");
+                return;
+            }
+            
+            Room room = db.get_room(booking.room_id);
+            Hotel hotel = db.get_hotel(room.hotel_id);
+            if (hotel.organization_id != user_id) {
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::base_template("Ошибка", "<div class='alert alert-danger'>У вас нет доступа к этому бронированию</div>", "", &user), "text/html; charset=utf-8");
+                return;
+            }
+            
+            auto params = parse_form_data(req.body);
+            
+            std::string room_id_str = params.count("room_id") ? params["room_id"] : "";
+            booking.room_id = std::stoll(room_id_str);
+            booking.check_in_date = params.count("check_in_date") ? params["check_in_date"] : "";
+            booking.check_out_date = params.count("check_out_date") ? params["check_out_date"] : "";
+            booking.adults_count = std::stoi(params.count("adults_count") ? params["adults_count"] : "1");
+            booking.children_count = std::stoi(params.count("children_count") ? params["children_count"] : "0");
+            booking.special_requests = params.count("special_requests") ? params["special_requests"] : "";
+            
+            if (booking.check_in_date.empty() || booking.check_out_date.empty()) {
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::booking_edit_form(db, booking_id, "Укажите даты заезда и выезда", booking, &user), "text/html; charset=utf-8");
+                return;
+            }
+            
+            if (!date_less(booking.check_in_date, booking.check_out_date)) {
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::booking_edit_form(db, booking_id, "Дата заезда должна быть раньше даты выезда", booking, &user), "text/html; charset=utf-8");
+                return;
+            }
+            
+            // Пересчитываем стоимость
+            Room new_room = db.get_room(booking.room_id);
+            if (new_room.room_id == 0) {
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::booking_edit_form(db, booking_id, "Номер не найден", booking, &user), "text/html; charset=utf-8");
+                return;
+            }
+            
+            // Проверка доступности номера (исключая текущее бронирование)
+            if (!db.is_room_available(booking.room_id, booking.check_in_date, booking.check_out_date, booking_id)) {
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::booking_edit_form(db, booking_id, "Номер занят на выбранные даты", booking, &user), "text/html; charset=utf-8");
+                return;
+            }
+            
+            std::tm check_in_tm = {}, check_out_tm = {};
+            std::istringstream check_in_ss(booking.check_in_date);
+            std::istringstream check_out_ss(booking.check_out_date);
+            check_in_ss >> std::get_time(&check_in_tm, "%Y-%m-%d");
+            check_out_ss >> std::get_time(&check_out_tm, "%Y-%m-%d");
+            
+            std::time_t check_in_time = std::mktime(&check_in_tm);
+            std::time_t check_out_time = std::mktime(&check_out_tm);
+            double days_diff = std::difftime(check_out_time, check_in_time) / (60 * 60 * 24);
+            int days = static_cast<int>(std::ceil(days_diff));
+            if (days < 1) days = 1;
+            
+            booking.total_price = new_room.price_per_day * days;
+            
+            try {
+                db.update_booking(booking);
+                res.set_header("Location", "/hotels/" + std::to_string(hotel.hotel_id) + "/bookings/?updated=1");
+                res.status = 302;
+            } catch (const std::exception& e) {
+                std::string error = "Ошибка при обновлении бронирования: " + std::string(e.what());
+                std::cerr << "[ERROR] " << get_current_datetime() << " - Failed to update booking: " << e.what() << std::endl;
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::booking_edit_form(db, booking_id, error, booking, &user), "text/html; charset=utf-8");
+            }
+        });
+
+        // Мои бронирования (для пользователей)
+        svr.Get("/my-bookings/", [&db](const Request& req, Response& res) {
+            int64_t user_id = get_user_id_from_session(req);
+            if (user_id == 0) {
+                res.set_header("Location", "/login/");
+                res.status = 302;
+                return;
+            }
+            
+            std::string success = "";
+            if (req.has_param("cancelled")) {
+                success = "Бронирование успешно отменено!";
+            }
+            
+            User user = db.get_user(user_id);
+            res.set_content(HtmlGenerator::user_bookings_list(db, user_id, "", success, &user), "text/html; charset=utf-8");
+        });
+
+        // Отмена бронирования
+        svr.Get(R"(/bookings/(\d+)/cancel/)", [&db](const Request& req, Response& res) {
+            int64_t user_id = get_user_id_from_session(req);
+            if (user_id == 0) {
+                res.set_header("Location", "/login/");
+                res.status = 302;
+                return;
+            }
+            
+            int64_t booking_id = std::stoll(req.matches[1]);
+            Booking booking = db.get_booking(booking_id);
+            if (booking.booking_id == 0) {
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::base_template("Ошибка", "<div class='alert alert-danger'>Бронирование не найдено</div>", "", &user), "text/html; charset=utf-8");
+                return;
+            }
+            
+            Guest guest = db.get_guest(booking.guest_id);
+            if (guest.user_id != user_id) {
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::base_template("Ошибка", "<div class='alert alert-danger'>Вы можете отменять только свои бронирования</div>", "", &user), "text/html; charset=utf-8");
+                return;
+            }
+            
+            try {
+                db.delete_booking(booking_id);
+                res.set_header("Location", "/my-bookings/?cancelled=1");
+                res.status = 302;
+            } catch (const std::exception& e) {
+                std::cerr << "[ERROR] " << get_current_datetime() << " - Failed to delete booking: " << e.what() << std::endl;
+                User user = db.get_user(user_id);
+                std::string error = "Ошибка при отмене бронирования: " + std::string(e.what());
+                res.set_content(HtmlGenerator::base_template("Ошибка", "<div class='alert alert-danger'>" + error + "</div>", "", &user), "text/html; charset=utf-8");
             }
         });
 
