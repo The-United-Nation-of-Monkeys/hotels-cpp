@@ -77,194 +77,6 @@ public:
             )
         )");
 
-        // Проверяем, существует ли таблица rooms и какие колонки в ней есть
-        bool table_exists = false;
-        bool has_hotel_id = false;
-        bool has_price_per_day = false;
-        sqlite3_stmt* stmt;
-        std::string check_table_sql = "SELECT name FROM sqlite_master WHERE type='table' AND name='rooms'";
-        if (sqlite3_prepare_v2(db, check_table_sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
-            if (sqlite3_step(stmt) == SQLITE_ROW) {
-                table_exists = true;
-            }
-        }
-        sqlite3_finalize(stmt);
-
-        if (table_exists) {
-            // Проверяем, какие колонки есть
-            std::string check_sql = "PRAGMA table_info(rooms)";
-            if (sqlite3_prepare_v2(db, check_sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
-                while (sqlite3_step(stmt) == SQLITE_ROW) {
-                    std::string col_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-                    if (col_name == "hotel_id") {
-                        has_hotel_id = true;
-                    }
-                    if (col_name == "price_per_day") {
-                        has_price_per_day = true;
-                    }
-                }
-            }
-            sqlite3_finalize(stmt);
-        }
-
-        // Если таблицы нет или нужных колонок нет, создаем/обновляем таблицу
-        if (!table_exists || !has_hotel_id || !has_price_per_day) {
-            if (table_exists && (!has_hotel_id || !has_price_per_day)) {
-                // Миграция: создаем новую таблицу и копируем данные
-                execute(R"(
-                    CREATE TABLE IF NOT EXISTS rooms_new (
-                        room_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        hotel_id INTEGER,
-                        number TEXT NOT NULL,
-                        name TEXT NOT NULL,
-                        description TEXT,
-                        type_name TEXT NOT NULL,
-                        price_per_day REAL NOT NULL DEFAULT 0,
-                        created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL,
-                        FOREIGN KEY (hotel_id) REFERENCES hotels(hotel_id)
-                    )
-                )");
-                
-                // Копируем данные из старой таблицы
-                if (has_hotel_id) {
-                    execute(R"(
-                        INSERT INTO rooms_new (room_id, hotel_id, number, name, description, type_name, price_per_day, created_at, updated_at)
-                        SELECT room_id, hotel_id, number, name, description, type_name, 0, created_at, updated_at
-                        FROM rooms
-                    )");
-                } else {
-                    execute(R"(
-                        INSERT INTO rooms_new (room_id, hotel_id, number, name, description, type_name, price_per_day, created_at, updated_at)
-                        SELECT room_id, NULL, number, name, description, type_name, 0, created_at, updated_at
-                        FROM rooms
-                    )");
-                }
-                
-                execute("DROP TABLE rooms");
-                execute("ALTER TABLE rooms_new RENAME TO rooms");
-            } else {
-                // Создаем таблицу с нуля
-                execute(R"(
-                    CREATE TABLE IF NOT EXISTS rooms (
-                        room_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        hotel_id INTEGER,
-                        number TEXT NOT NULL,
-                        name TEXT NOT NULL,
-                        description TEXT,
-                        type_name TEXT NOT NULL,
-                        price_per_day REAL NOT NULL DEFAULT 0,
-                        created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL,
-                        FOREIGN KEY (hotel_id) REFERENCES hotels(hotel_id)
-                    )
-                )");
-            }
-        } else {
-            // Если таблица и все колонки уже есть, просто убеждаемся что таблица существует
-            execute(R"(
-                CREATE TABLE IF NOT EXISTS rooms (
-                    room_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    hotel_id INTEGER,
-                    number TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    description TEXT,
-                    type_name TEXT NOT NULL,
-                    price_per_day REAL NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    FOREIGN KEY (hotel_id) REFERENCES hotels(hotel_id)
-                )
-            )");
-        }
-
-        // Проверяем, существует ли таблица guests и есть ли в ней колонка user_id
-        bool guests_table_exists = false;
-        bool guests_has_user_id = false;
-        std::string check_guests_table_sql = "SELECT name FROM sqlite_master WHERE type='table' AND name='guests'";
-        if (sqlite3_prepare_v2(db, check_guests_table_sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
-            if (sqlite3_step(stmt) == SQLITE_ROW) {
-                guests_table_exists = true;
-            }
-        }
-        sqlite3_finalize(stmt);
-
-        if (guests_table_exists) {
-            std::string check_guests_sql = "PRAGMA table_info(guests)";
-            if (sqlite3_prepare_v2(db, check_guests_sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
-                while (sqlite3_step(stmt) == SQLITE_ROW) {
-                    std::string col_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-                    if (col_name == "user_id") {
-                        guests_has_user_id = true;
-                        break;
-                    }
-                }
-            }
-            sqlite3_finalize(stmt);
-        }
-
-        if (!guests_table_exists || !guests_has_user_id) {
-            if (guests_table_exists && !guests_has_user_id) {
-                // Миграция: добавляем user_id
-                execute(R"(
-                    CREATE TABLE IF NOT EXISTS guests_new (
-                        guest_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        user_id INTEGER,
-                        first_name TEXT NOT NULL,
-                        last_name TEXT NOT NULL,
-                        middle_name TEXT,
-                        passport_number TEXT UNIQUE NOT NULL,
-                        email TEXT,
-                        phone TEXT NOT NULL,
-                        created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL,
-                        FOREIGN KEY (user_id) REFERENCES users(user_id)
-                    )
-                )");
-                
-                execute(R"(
-                    INSERT INTO guests_new (guest_id, user_id, first_name, last_name, middle_name, passport_number, email, phone, created_at, updated_at)
-                    SELECT guest_id, NULL, first_name, last_name, middle_name, passport_number, email, phone, created_at, updated_at
-                    FROM guests
-                )");
-                
-                execute("DROP TABLE guests");
-                execute("ALTER TABLE guests_new RENAME TO guests");
-            } else {
-                execute(R"(
-                    CREATE TABLE IF NOT EXISTS guests (
-                        guest_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        user_id INTEGER,
-                        first_name TEXT NOT NULL,
-                        last_name TEXT NOT NULL,
-                        middle_name TEXT,
-                        passport_number TEXT UNIQUE NOT NULL,
-                        email TEXT,
-                        phone TEXT NOT NULL,
-                        created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL,
-                        FOREIGN KEY (user_id) REFERENCES users(user_id)
-                    )
-                )");
-            }
-        } else {
-            execute(R"(
-                CREATE TABLE IF NOT EXISTS guests (
-                    guest_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    first_name TEXT NOT NULL,
-                    last_name TEXT NOT NULL,
-                    middle_name TEXT,
-                    passport_number TEXT UNIQUE NOT NULL,
-                    email TEXT,
-                    phone TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    FOREIGN KEY (user_id) REFERENCES users(user_id)
-                )
-            )");
-        }
-
         execute(R"(
             CREATE TABLE IF NOT EXISTS bookings (
                 booking_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -577,18 +389,30 @@ public:
     }
 
     // Booking operations
-    std::vector<Booking> get_all_bookings(const std::string& search = "") {
+    std::vector<Booking> get_all_bookings(const std::string& search = "", int64_t user_id = 0) {
         std::vector<Booking> bookings;
         std::string sql = R"(
             SELECT b.booking_id, b.guest_id, b.room_id, b.check_in_date, b.check_out_date, 
                    b.adults_count, b.children_count, b.total_price, b.special_requests, 
                    b.created_at, b.updated_at
             FROM bookings b
+            JOIN guests g ON b.guest_id = g.guest_id
         )";
         
+        std::vector<std::string> conditions;
+        if (user_id > 0) {
+            conditions.push_back("g.user_id = " + std::to_string(user_id));
+        }
         if (!search.empty()) {
-            sql += " JOIN guests g ON b.guest_id = g.guest_id JOIN rooms r ON b.room_id = r.room_id";
-            sql += " WHERE g.first_name LIKE '%" + search + "%' OR g.last_name LIKE '%" + search + "%' OR r.number LIKE '%" + search + "%' OR r.name LIKE '%" + search + "%'";
+            sql += " JOIN rooms r ON b.room_id = r.room_id";
+            conditions.push_back("(g.first_name LIKE '%" + search + "%' OR g.last_name LIKE '%" + search + "%' OR r.number LIKE '%" + search + "%' OR r.name LIKE '%" + search + "%')");
+        }
+        
+        if (!conditions.empty()) {
+            sql += " WHERE " + conditions[0];
+            for (size_t i = 1; i < conditions.size(); ++i) {
+                sql += " AND " + conditions[i];
+            }
         }
         sql += " ORDER BY b.check_in_date DESC";
 

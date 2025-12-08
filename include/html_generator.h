@@ -617,7 +617,8 @@ public:
     }
 
     static std::string bookings_list(Database& db, const std::string& search = "", const User* user = nullptr) {
-        auto bookings = db.get_all_bookings(search);
+        int64_t user_id = (user && user->user_id > 0) ? user->user_id : 0;
+        auto bookings = db.get_all_bookings(search, user_id);
 
         std::ostringstream content;
         content << R"(

@@ -1,7 +1,7 @@
 #include "../include/models.h"
 #include "../include/database.h"
 #include "../include/html_generator.h"
-#include <httplib.h>
+#include "../deps/httplib.h"
 #include <iostream>
 #include <sstream>
 #include <map>
@@ -160,6 +160,11 @@ int main() {
         // Список гостей
         svr.Get("/guests/", [&db](const Request& req, Response& res) {
             int64_t user_id = get_user_id_from_session(req);
+            if (user_id == 0) {
+                res.set_header("Location", "/login/");
+                res.status = 302;
+                return;
+            }
             std::string search = "";
             if (req.has_param("search")) {
                 search = url_decode(req.get_param_value("search"));
@@ -169,12 +174,23 @@ int main() {
 
         // Форма создания гостя (GET)
         svr.Get("/guests/create/", [&db](const Request& req, Response& res) {
+            int64_t user_id = get_user_id_from_session(req);
+            if (user_id == 0) {
+                res.set_header("Location", "/login/");
+                res.status = 302;
+                return;
+            }
             res.set_content(HtmlGenerator::guest_form(), "text/html; charset=utf-8");
         });
 
         // Создание гостя (POST)
         svr.Post("/guests/create/", [&db](const Request& req, Response& res) {
             int64_t user_id = get_user_id_from_session(req);
+            if (user_id == 0) {
+                res.set_header("Location", "/login/");
+                res.status = 302;
+                return;
+            }
             auto params = parse_form_data(req.body);
             
             Guest guest;
@@ -207,18 +223,35 @@ int main() {
 
         // Детали гостя
         svr.Get(R"(/guests/(\d+)/)", [&db](const Request& req, Response& res) {
+            int64_t user_id = get_user_id_from_session(req);
+            if (user_id == 0) {
+                res.set_header("Location", "/login/");
+                res.status = 302;
+                return;
+            }
             int64_t guest_id = std::stoll(req.matches[1]);
+            Guest guest = db.get_guest(guest_id);
+            if (guest.guest_id == 0 || guest.user_id != user_id) {
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::base_template("Ошибка", "<div class='alert alert-danger'>Гость не найден или у вас нет доступа к этому гостю</div>", "", &user), "text/html; charset=utf-8");
+                return;
+            }
             res.set_content(HtmlGenerator::guest_detail(db, guest_id), "text/html; charset=utf-8");
         });
 
         // Список бронирований (только для просмотра, без редактирования)
         svr.Get("/bookings/", [&db](const Request& req, Response& res) {
+            int64_t user_id = get_user_id_from_session(req);
+            if (user_id == 0) {
+                res.set_header("Location", "/login/");
+                res.status = 302;
+                return;
+            }
             std::string search = "";
             if (req.has_param("search")) {
                 search = url_decode(req.get_param_value("search"));
             }
-            int64_t user_id = get_user_id_from_session(req);
-            User user = user_id > 0 ? db.get_user(user_id) : User();
+            User user = db.get_user(user_id);
             res.set_content(HtmlGenerator::bookings_list(db, search, &user), "text/html; charset=utf-8");
         });
 
@@ -373,7 +406,41 @@ int main() {
 
         // Детали бронирования
         svr.Get(R"(/bookings/(\d+)/)", [&db](const Request& req, Response& res) {
+            int64_t user_id = get_user_id_from_session(req);
+            if (user_id == 0) {
+                res.set_header("Location", "/login/");
+                res.status = 302;
+                return;
+            }
             int64_t booking_id = std::stoll(req.matches[1]);
+            Booking booking = db.get_booking(booking_id);
+            if (booking.booking_id == 0) {
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::base_template("Ошибка", "<div class='alert alert-danger'>Бронирование не найдено</div>", "", &user), "text/html; charset=utf-8");
+                return;
+            }
+            Guest guest = db.get_guest(booking.guest_id);
+            // Проверяем, что гость принадлежит текущему пользователю
+            // Исключение: если пользователь - организация, владеющая отелем, то он может видеть бронирование
+            bool has_access = false;
+            if (guest.user_id == user_id) {
+                has_access = true;
+            } else {
+                // Проверяем, является ли пользователь организацией, владеющей отелем
+                User user = db.get_user(user_id);
+                if (user.is_organization()) {
+                    Room room = db.get_room(booking.room_id);
+                    Hotel hotel = db.get_hotel(room.hotel_id);
+                    if (hotel.organization_id == user_id) {
+                        has_access = true;
+                    }
+                }
+            }
+            if (!has_access) {
+                User user = db.get_user(user_id);
+                res.set_content(HtmlGenerator::base_template("Ошибка", "<div class='alert alert-danger'>У вас нет доступа к этому бронированию</div>", "", &user), "text/html; charset=utf-8");
+                return;
+            }
             res.set_content(HtmlGenerator::booking_detail(db, booking_id), "text/html; charset=utf-8");
         });
 
