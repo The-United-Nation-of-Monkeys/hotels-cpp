@@ -308,7 +308,7 @@ public:
         return base_template("Главная - Система бронирования отелей", content.str(), "", user);
     }
 
-    static std::string rooms_list(Database& db, const std::string& type_filter = "") {
+    static std::string rooms_list(Database& db, const std::string& type_filter = "", const User* user = nullptr) {
         auto rooms = db.get_all_rooms(type_filter);
         auto room_types = db.get_room_types();
 
@@ -371,7 +371,7 @@ public:
         content << R"(
 </div>)";
 
-        return base_template("Номера - Система бронирования отелей", content.str());
+        return base_template("Номера - Система бронирования отелей", content.str(), "", user);
     }
 
     static std::string room_detail(Database& db, int64_t room_id, const std::string& check_in = "", const std::string& check_out = "") {
@@ -396,7 +396,7 @@ public:
         <hr>
         <h3>Описание</h3>
         <p>)" << escape_html(room.description) << R"(</p>
-        
+
         <h3>Проверка доступности</h3>
         <form method="GET" action="/rooms/)" << room_id << R"(/" class="mb-3">
             <div class="row">
@@ -439,7 +439,7 @@ public:
         return base_template("Номер " + room.number + " - Система бронирования отелей", content.str());
     }
 
-    static std::string guests_list(Database& db, const std::string& search = "", int64_t user_id = 0) {
+    static std::string guests_list(Database& db, const std::string& search = "", int64_t user_id = 0, const User* user = nullptr) {
         auto guests = db.get_all_guests(search, user_id);
 
         std::ostringstream content;
@@ -499,7 +499,7 @@ public:
     </div>
 </div>)";
 
-        return base_template("Гости - Система бронирования отелей", content.str());
+        return base_template("Гости - Система бронирования отелей", content.str(), "", user);
     }
 
     static std::string guest_detail(Database& db, int64_t guest_id) {
@@ -525,7 +525,7 @@ public:
             <tr><th>Телефон:</th><td>)" << escape_html(guest.phone) << R"(</td></tr>
             <tr><th>Email:</th><td>)" << escape_html(guest.email.empty() ? "-" : guest.email) << R"(</td></tr>
         </table>
-        
+
         <h3>Бронирования</h3>)";
 
         if (bookings.empty()) {
@@ -683,7 +683,7 @@ public:
     </div>
 </div>)";
 
-        return base_template("Бронирования - Система бронирования отелей", content.str());
+        return base_template("Бронирования - Система бронирования отелей", content.str(), "", user);
     }
 
     static std::string booking_detail(Database& db, int64_t booking_id) {
